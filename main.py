@@ -1,7 +1,14 @@
-import questionary
-from questionary import Choice, Validator, ValidationError
 import argparse
 import os
+from collections import Counter
+from typing import List
+
+import ass
+import questionary
+from ass import Style
+from ass.data import Color
+from questionary import Choice, ValidationError, Validator
+
 
 def main():
     args = parse_args()
@@ -19,64 +26,43 @@ def main():
 class ASSFile:
     def __init__(self, file_path):
         self.file_path = file_path
-
-    def get_fonts(self):
-        """
-        Extract all font names from the file.
-        Returns a list of tuples with font name and the full line.
-        """
-        
-        with open(self.file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        fonts = [(line.split(",")[1].strip(), line) for line in lines if line.startswith("Style:")]
-        return fonts
+        with open(self.file_path, encoding="utf-8-sig") as f:
+            self.ass_file = ass.parse(f)
+    
+    def get_font_names(self):
+        return [style.fontname for style in self.ass_file.styles]
 
     def find_styles_by_font(self, font_name):
-        return [line for font, line in self.get_fonts() if font == font_name]
+        return [style for style in self.ass_file.styles if style.fontname == font_name]
 
     def find_most_frequent_font(self):
-        fonts = self.get_fonts()
-        font_counts = {}
-        for font, _ in fonts:
-            font_counts[font] = font_counts.get(font, 0) + 1
-        return max(font_counts, key=font_counts.get)
+        return Counter(self.get_font_names()).most_common(1)[0][0]
 
-    def replace_style_attributes(self, chosen_styles, replacements):
+    def replace_style_attributes(self, chosen_styles: List[Style], replacements: dict):
         """
         Replaces the style attributes for the chosen styles.
 
         Args:
             self (ASSFile): The ASSFile object.
-            chosen_styles (list): The styles to be modified. Should be the full line from the file.
+            chosen_styles (List[Style]): The Styles to be modified.
             replacements (dict): The replacements to be made. Key is the index of the attribute to be replaced.
-                Value is the new value to be set. If the value is a hex color code, it will be converted to a
-                Visual Basic hex color code. If the value is an empty string, it will be skipped.
+                Value is the new value to be set. Values can either be strings or booleans.
+                If the value is "", it will be skipped.
         """
         
-        with open(self.file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        for replacement_style in chosen_styles:
+            style: Style = next((style for style in self.ass_file.styles if style.name == replacement_style.name), None)
+            if style is None:
+                continue
 
-        in_styles_section = False
-        updated_lines = []
+            for key, value in replacements.items():    
+                if isinstance(value, str) and value.strip() != "":
+                    if key.endswith("color"):
+                        value = StyleModifier.hex_to_ass_color(value)
+                    setattr(style, key, value)
 
-        for line in lines:
-            if line.strip().startswith("[V4+ Styles]"):
-                in_styles_section = True
-            elif line.strip().startswith("[") and in_styles_section:
-                in_styles_section = False
-
-            if in_styles_section and line.startswith("Style:") and line in chosen_styles:
-                parts = line.split(",")
-                for index, key in replacements.items():
-                    if index < len(parts) and key.strip():
-                        parts[index] = key if not key.startswith("#") else StyleModifier.hex_to_ass_color(key)
-                line = ",".join(parts)
-
-            updated_lines.append(line)
-
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            f.writelines(updated_lines)
+        with open(self.file_path, "w", encoding="utf-8-sig") as f:
+            self.ass_file.dump_file(f)
 
 
 class UserInteraction:
@@ -94,53 +80,48 @@ class UserInteraction:
             choices=[
                 Choice("Search by font name", value="font_name"),
                 Choice("Most frequently used font", value="most_frequent"),
-                Choice("All styles", value="all_styles"),
+                Choice("Select all styles", value="all_styles"),
             ],
         ).unsafe_ask()
 
     @staticmethod
-    def get_chosen_styles(ass_file, search_type, args):
+    def get_chosen_styles(ass_file: ASSFile, search_type, args):
         if search_type == "font_name":
             return UserInteraction.get_styles_by_font(ass_file, args.font_name)
         elif search_type == "most_frequent":
             return UserInteraction.get_most_frequent_styles(ass_file)
         elif search_type == "all_styles":
-            return [t[1] for t in ass_file.get_fonts()]
+            return ass_file.ass_file.styles
         
     @staticmethod
-    def get_styles_by_font(ass_file, font_name=None):
-        fonts = ass_file.get_fonts()
-        choices = list(set([t[0] for t in fonts]))
+    def get_styles_by_font(ass_file: ASSFile, font_name=""):
+        font_names = ass_file.get_font_names()
         font_name = font_name or questionary.autocomplete(
             "Enter the font name:",
-            choices=choices,
-            validate=lambda font: True if font in choices else "No styles found.",
+            choices=list(set(font_names)),
+            validate=lambda font: True if font in font_names else "No styles found.",
         ).unsafe_ask()
         styles = ass_file.find_styles_by_font(font_name)
         return UserInteraction.select_style(styles) if len(styles) > 1 else styles
 
     @staticmethod
-    def get_most_frequent_styles(ass_file):
+    def get_most_frequent_styles(ass_file: ASSFile):
         font_name = ass_file.find_most_frequent_font()
         questionary.print(f"ℹ Most frequently used font: {font_name}", style="bold fg:blue")
         styles = ass_file.find_styles_by_font(font_name)
         return UserInteraction.select_style(styles) if len(styles) > 1 else styles
         
     @staticmethod
-    def select_style(styles):
+    def select_style(styles: List[Style]):
         """Allows user to select a specific style or all styles."""
-        choices = ["All styles"] + [t.split(",")[0].split(":")[1].strip() for t in styles]
+        choices = ["All styles"] + [style.name for style in styles]
         selection = questionary.select(
             "Multiple styles found. Choose one:", choices=choices
         ).unsafe_ask()
-        return (
-            styles
-            if selection == "All styles"
-            else [next(s for s in styles if selection in s)]
-        )
+        return styles if selection == "All styles" else [style for style in styles if style.fontname == selection]
 
     @staticmethod
-    def replace_style_attributes_prompt(ass_file, chosen_styles, args):
+    def replace_style_attributes_prompt(ass_file: ASSFile, chosen_styles, args):
         replace_type = args.replace_type or questionary.select(
             "What would you like to replace?",
             choices=[Choice("Font name", value="font_name"), Choice("Everything", value="everything")],
@@ -153,32 +134,30 @@ class StyleModifier:
     @staticmethod
     def get_replacements(replace_type, args):
         if replace_type == "font_name":
-            return {1: args.new_font or questionary.text("Enter the new font name:").unsafe_ask()}
+            return {"fontname": args.new_font or questionary.text("Enter the new font name:").unsafe_ask()}
+        
         return {
-            i: v for i, v in enumerate([
-                args.new_font or questionary.text("New font name (enter to skip):", default="").unsafe_ask(),
-                args.new_size or questionary.text("New font size (enter to skip):", default="").unsafe_ask(),
-                args.new_color or questionary.text("New primary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-                args.new_secondary_color or questionary.text("New secondary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-                args.new_outline_color or questionary.text("New outline hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-                args.new_back_color or questionary.text("New back hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-                args.bold or questionary.select("Make text bold?", choices=[Choice("Yes", value="1"), Choice("No", value="0"), Choice("Skip", value="")]).unsafe_ask(),
-                args.italic or questionary.select("Make text italic?", choices=[Choice("Yes", value="1"), Choice("No", value="0"), Choice("Skip", value="")]).unsafe_ask(),
-                args.underline or questionary.select("Underline text?", choices=[Choice("Yes", value="1"), Choice("No", value="0"), Choice("Skip", value="")]).unsafe_ask(),
-                args.strikeout or questionary.select("Strikeout text?", choices=[Choice("Yes", value="1"), Choice("No", value="0"), Choice("Skip", value="")]).unsafe_ask(),
-                args.outline_thickness or questionary.text("Outline thickness (enter to skip):", default="").unsafe_ask(),
-                args.shadow_distance or questionary.text("Shadow distance (enter to skip):", default="").unsafe_ask()
-            ], start=1) if v.strip()
+            "fontname": args.new_font or questionary.text("New font name (enter to skip):", default="").unsafe_ask(),
+            "fontsize": args.new_size or questionary.text("New font size (enter to skip):", default="").unsafe_ask(),
+            "primary_color": args.new_color or questionary.text("New primary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "secondary_color": args.new_secondary_color or questionary.text("New secondary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "outline_color": args.new_outline_color or questionary.text("New outline hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "back_color": args.new_back_color or questionary.text("New back hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "bold": args.bold or questionary.select("Make text bold?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
+            "italic": args.italic or questionary.select("Make text italic?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
+            "underline": args.underline or questionary.select("Underline text?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
+            "strikeout": args.strikeout or questionary.select("Strikeout text?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
+            "outline": args.outline_thickness or questionary.text("Outline thickness (enter to skip):", default="").unsafe_ask(),
+            "shadow": args.shadow_distance or questionary.text("Shadow distance (enter to skip):", default="").unsafe_ask()
         }
 
     @staticmethod
     def hex_to_ass_color(hex_color):
-        """Convert standard #RRGGBB hex to &HAABBGGRR Visual Basic hex code format"""
-
         hex_color = hex_color.lstrip("#")
-        if len(hex_color) != 6:
-            raise ValueError("Invalid hex color format. Use #RRGGBB.")
-        return f"&H00{hex_color[4:6]}{hex_color[2:4]}{hex_color[0:2]}".upper()
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return Color(r, g, b, 255)
 
 
 class HexCodeValidator(Validator):

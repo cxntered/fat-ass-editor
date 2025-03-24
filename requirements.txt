@@ -1,3 +1,5 @@
+ass==0.5.4
 prompt_toolkit==3.0.50
 questionary==2.1.0
+setuptools==77.0.3
 wcwidth==0.2.13
