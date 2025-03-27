@@ -18,9 +18,7 @@ def main():
 
     search_type = UserInteraction.get_search_type(args)
     chosen_styles = UserInteraction.get_chosen_styles(ass_file, search_type, args)
-    UserInteraction.replace_style_attributes_prompt(ass_file, chosen_styles, args)
-    
-    questionary.print(f"✓ Updated .ass file saved to: {file_path}", style="bold fg:green")
+    UserInteraction.replace_style_attributes_prompt(ass_file, chosen_styles, args)    
 
 
 class ASSFile:
@@ -46,8 +44,8 @@ class ASSFile:
             self (ASSFile): The ASSFile object.
             chosen_styles (List[Style]): The Styles to be modified.
             replacements (dict): The replacements to be made. Key is the index of the attribute to be replaced.
-                Value is the new value to be set. Values can either be strings or booleans.
-                If the value is "", it will be skipped.
+                Value is the new value to be set. Values can either be a String or a bool.
+                If the value is an empty string, it will be ignored.
         """
         
         for replacement_style in chosen_styles:
@@ -60,9 +58,12 @@ class ASSFile:
                     if key.endswith("color"):
                         value = StyleModifier.hex_to_ass_color(value)
                     setattr(style, key, value)
+                elif isinstance(value, bool):
+                    setattr(style, key, value)
 
         with open(self.file_path, "w", encoding="utf-8-sig") as f:
             self.ass_file.dump_file(f)
+            questionary.print(f"✓ Updated .ass file saved to: {self.file_path}", style="bold fg:green")
 
 
 class UserInteraction:
@@ -87,7 +88,7 @@ class UserInteraction:
     @staticmethod
     def get_chosen_styles(ass_file: ASSFile, search_type, args):
         if search_type == "font_name":
-            return UserInteraction.get_styles_by_font(ass_file, args.font_name)
+            return UserInteraction.get_styles_by_font(ass_file, args.search_font)
         elif search_type == "most_frequent":
             return UserInteraction.get_most_frequent_styles(ass_file)
         elif search_type == "all_styles":
@@ -134,15 +135,15 @@ class StyleModifier:
     @staticmethod
     def get_replacements(replace_type, args):
         if replace_type == "font_name":
-            return {"fontname": args.new_font or questionary.text("Enter the new font name:").unsafe_ask()}
-        
+            return {"fontname": args.font_name or questionary.text("Enter the new font name:").unsafe_ask()}
+
         return {
-            "fontname": args.new_font or questionary.text("New font name (enter to skip):", default="").unsafe_ask(),
-            "fontsize": args.new_size or questionary.text("New font size (enter to skip):", default="").unsafe_ask(),
-            "primary_color": args.new_color or questionary.text("New primary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-            "secondary_color": args.new_secondary_color or questionary.text("New secondary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-            "outline_color": args.new_outline_color or questionary.text("New outline hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
-            "back_color": args.new_back_color or questionary.text("New back hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "fontname": args.font_name or questionary.text("New font name (enter to skip):", default="").unsafe_ask(),
+            "fontsize": args.font_size or questionary.text("New font size (enter to skip):", default="").unsafe_ask(),
+            "primary_color": args.color or questionary.text("New primary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "secondary_color": args.secondary_color or questionary.text("New secondary hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "outline_color": args.outline_color or questionary.text("New outline hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
+            "back_color": args.back_color or questionary.text("New back hex color (enter to skip):", validate=HexCodeValidator, default="").unsafe_ask(),
             "bold": args.bold or questionary.select("Make text bold?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
             "italic": args.italic or questionary.select("Make text italic?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
             "underline": args.underline or questionary.select("Underline text?", choices=[Choice("Yes", value=True), Choice("No", value=False), Choice("Skip", value="")]).unsafe_ask(),
@@ -178,23 +179,35 @@ class ASSFileValidator(Validator):
 
 
 def parse_args():
+    def str_to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if value.lower() in ('true', 'yes', 't', 'y', '1'):
+            return True
+        elif value.lower() in ('false', 'no', 'f', 'n', '0'):
+            return False
+        elif value.lower() == "":
+            return ""
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
     parser = argparse.ArgumentParser(description="Modify .ass subtitle styles via CLI or interactive prompts.")
     parser.add_argument("file_path", nargs="?", help="Path to the .ass file.")
     parser.add_argument("--search-type", choices=["font_name", "most_frequent", "all_styles"], help="Method to search for styles.")
-    parser.add_argument("--font-name", help="Font name to search for (if using 'font_name' search type).")
+    parser.add_argument("--search-font", help="Font name to search for (if using 'font_name' search type).")
     parser.add_argument("--replace-type", choices=["font_name", "everything"], help="What to replace in styles.")
-    parser.add_argument("--new-font", help="New font name if replacing font.")
-    parser.add_argument("--new-size", help="New font size.")
-    parser.add_argument("--new-color", help="New primary hex color code.")
-    parser.add_argument("--new-secondary-color", help="New secondary hex color code.")
-    parser.add_argument("--new-outline-color", help="New outline hex color code.")
-    parser.add_argument("--new-back-color", help="New back hex color code.")
-    parser.add_argument("--bold", choices=["1", "0"], help="Make text bold (1 for yes, 0 for no).")
-    parser.add_argument("--italic", choices=["1", "0"], help="Make text italic (1 for yes, 0 for no).")
-    parser.add_argument("--underline", choices=["1", "0"], help="Underline text (1 for yes, 0 for no).")
-    parser.add_argument("--strikeout", choices=["1", "0"], help="Strikeout text (1 for yes, 0 for no).")
-    parser.add_argument("--outline-thickness", help="New outline thickness.")
-    parser.add_argument("--shadow-distance", help="New shadow distance.")
+    parser.add_argument("--font-name", default="", help="New font name.")
+    parser.add_argument("--font-size", default="", help="New font size.")
+    parser.add_argument("--color", default="", help="New primary hex color code.")
+    parser.add_argument("--secondary-color", default="", help="New secondary hex color code.")
+    parser.add_argument("--outline-color", default="", help="New outline hex color code.")
+    parser.add_argument("--back-color", default="", help="New back hex color code.")
+    parser.add_argument("--bold", default="", type=str_to_bool, nargs='?', const=True, help="Make text bold.")
+    parser.add_argument("--italic", default="", type=str_to_bool, nargs='?', const=True, help="Make text italic.")
+    parser.add_argument("--underline", default="", type=str_to_bool, nargs='?', const=True, help="Underline text.")
+    parser.add_argument("--strikeout", default="", type=str_to_bool, nargs='?', const=True, help="Strikeout text.")
+    parser.add_argument("--outline-thickness", default="", help="New outline thickness.")
+    parser.add_argument("--shadow-distance", default="", help="New shadow distance.")
     return parser.parse_args()
 
 
